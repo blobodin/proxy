@@ -1,6 +1,6 @@
 CC = clang-with-asan
 CFLAGS = -Wall -Wextra -Iinclude
-LDFLAGS = -lpthread 
+LDFLAGS = -lpthread
 
 all: bin/proxy
 
@@ -20,7 +20,7 @@ test-concurrent:
 out/%.o: src/%.c
 	$(CC) $(CFLAGS) -c $^ -o $@
 
-bin/proxy: out/proxy.o out/buffer.o out/client_thread.o
+bin/proxy: out/proxy.o out/buffer.o out/client_thread.o out/cache.o out/linked_list.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 clean:

@@ -16,8 +16,12 @@
 
 #include "client_thread.h"
 #include "buffer.h"
+#include "cache.h"
 
 #define BUFFER_SIZE 8192
+
+/* Global Cache Variable */
+extern cache_t *cache;
 
 static int open_client_fd(char *hostname, int port, int *err) {
     int client_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -180,13 +184,13 @@ static bool make_get_header(int client_fd, char **full_host, char **path) {
      * We reject any other request (and terminate the connection),
      * because we believe it to be malformed.
      */
+    char *saveptr;
     char *data = buffer_string(buf);
-    char *prefix  = strtok(data, " ");
-    sleep(1);
-    char *url     = strtok(NULL, " ");
-    char *version = strtok(NULL, " ");
+    char *prefix  = strtok_r(data, " ", &saveptr);
+    char *url     = strtok_r(NULL, " ", &saveptr);
+    char *version = strtok_r(NULL, " ", &saveptr);
 
-    if (prefix == NULL || url == NULL || version == NULL || strtok(NULL, " ") != NULL) {
+    if (prefix == NULL || url == NULL || version == NULL || strtok_r(NULL, " ", &saveptr) != NULL) {
         verbose_printf("Malformed request string: GET requests have"
                        " three parts\n");
         goto MALFORMED_ERROR;
@@ -322,8 +326,12 @@ static bool filter_rest_headers(int client_fd, int server_fd, char *host) {
 
 /* Sends the server's response to the client.
  * Returns whether successful */
-static bool send_response(int client_fd, int server_fd) {
+static bool send_response(int client_fd, int server_fd, char *key, clock_t timestamp) {
     /* Loop until server sends an EOF */
+
+    /* Data structure to store web object in cache node */
+    buffer_t *data = buffer_create(BUFFER_SIZE);
+
     while (true) {
         uint8_t buf[BUFFER_SIZE];
         ssize_t bytes_read = read(server_fd, buf, sizeof(buf));
@@ -334,6 +342,15 @@ static bool send_response(int client_fd, int server_fd) {
 
         /* Server sent EOF */
         if (bytes_read == 0) {
+            /* If the accumulated web object is not too big, add it to the
+             * cache. */
+            if (buffer_length(data) <= MAX_OBJECT_SIZE) {
+                cache_add(cache, key, data, timestamp);
+            } else {
+                free(key);
+                buffer_free(data);
+            }
+
             return true;
         }
 
@@ -341,16 +358,43 @@ static bool send_response(int client_fd, int server_fd) {
         if (bytes_written < 0) {
             return false;
         }
+
+        /* Stores server data on web object in a data structure readily usable
+         * by the cache. */
+        buffer_append_bytes(data, buf, bytes_read);
     }
 }
 
 void *handle_request(void *cfd) {
+    pthread_detach(pthread_self());
     int client_fd = *(int *) cfd;
     free(cfd);
 
     char *host = NULL, *path = NULL;
     if (!make_get_header(client_fd, &host, &path)) {
         goto CLIENT_ERROR;
+    }
+
+    /* Get current timestamp for the node being found or created. */
+    clock_t timestamp;
+    timestamp = clock();
+
+    /* Gets key of host and path */
+    char *key = (char *) malloc((strlen(host) +
+                                 strlen(path) + 1) * sizeof(char));
+    key = strcpy(key, host);
+    key = strcat(key, path);
+
+    /* Attempts to get node from cache using the key */
+    buffer_t *data = cache_get(cache, key, timestamp);
+    /* If the key is in the cache, use it */
+    if (data != NULL) {
+        /* Writes buffer data from cache into the client. */
+        write(client_fd, buffer_data(data), buffer_length(data));
+        buffer_free(data);
+        /* Skips over server connection since it would be
+         * unnecessary if the cache has the web object. */
+        goto CACHE_HIT;
     }
 
     /* Establish connection with requested server */
@@ -373,11 +417,10 @@ void *handle_request(void *cfd) {
 
     /* Forward response from server to client, and store the response in the
      * cache if possible */
-    if (!send_response(client_fd, server_fd)) {
+    if (!send_response(client_fd, server_fd, key, timestamp)) {
         verbose_printf("send_reponse error: %s\n", strerror(errno));
         /* Fall through, since we're done anyway */
     }
-
     close(server_fd);
 
     /* Close the write end of the client socket and wait for it to send EOF. */
@@ -395,6 +438,21 @@ void *handle_request(void *cfd) {
     free(host);
     free(path);
     return NULL;
+
+    /* Protocol if a web object is already in the cache. */
+    CACHE_HIT:
+        if (shutdown(client_fd, SHUT_WR) < 0) {
+            verbose_printf("shutdown error: %s\n", strerror(errno));
+            goto CLIENT_ERROR;
+        }
+        if (read(client_fd, discard_buffer, sizeof(discard_buffer)) < 0) {
+            verbose_printf("read error: %s\n", strerror(errno));
+            goto CLIENT_ERROR;
+        }
+        close(client_fd);
+        free(host);
+        free(path);
+        return NULL;
 
     SERVER_ERROR:
         verbose_printf("Error in writing to server\n");

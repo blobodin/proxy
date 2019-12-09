@@ -7,6 +7,8 @@
 /* Growable byte buffer */
 typedef struct buffer_t buffer_t;
 
+/* Makes copy of given buffer and returns it */
+buffer_t *buffer_copy(buffer_t *buf);
 /* Allocate the data necessary for the buffer and returns it */
 buffer_t *buffer_create(size_t initial_capacity);
 /* Free the buffer */

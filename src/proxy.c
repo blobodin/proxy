@@ -9,11 +9,14 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <unistd.h>
-
 #include "client_thread.h"
+#include "cache.h"
 
 /* Maximum number of connections to queue up */
 #define LISTENQ 1024
+
+/* Global Cache Variable */
+cache_t *cache = NULL;
 
 static int open_listen_fd(int port) {
     /* Create a socket descriptor */
@@ -88,6 +91,9 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    /* Initalizes cache */
+    cache = cache_create();
+
     printf("Proxy listening on port %d\n", port);
     while (true) {
         int *cfd = malloc(sizeof(int));
@@ -99,6 +105,11 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        handle_request(cfd);
+        /* Spawns thread to handle request. */
+        pthread_t thr;
+        pthread_create(&thr, NULL, handle_request, cfd);
     }
+
+    /* Waits for detached threads. */
+    pthread_exit(NULL);
 }

@@ -27,6 +27,12 @@ static void buffer_resize(buffer_t *buf, size_t new_capacity) {
     buf->capacity = new_capacity;
 }
 
+buffer_t *buffer_copy(buffer_t *buf) {
+    buffer_t *buf_cpy = buffer_create(buf->capacity);
+    buffer_append_bytes(buf_cpy, buf->data, buf->length);
+    return buf_cpy;
+}
+
 buffer_t *buffer_create(size_t initial_capacity) {
     buffer_t *buf = malloc(sizeof(*buf));
     assert(buf != NULL);
